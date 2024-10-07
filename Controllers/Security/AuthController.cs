@@ -1,37 +1,44 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using SmartHome.Data.Interfaces;
+using SmartHome.Data.Sqlite;
+using SmartHome.Data.Users;
 using SmartHome.Security.Oauth2;
+using SmartHome.Security.UserSecrets;
+using SQLitePCL;
+using System.Net;
 using System.Security.Claims;
 
 namespace SmartHome.Controllers.Security
 {
+    [Route("[controller]")]
     [ApiController]
-    [Route("api/[controller]")]
     public class AuthController : ControllerBase
     {
-        private readonly TokenProcessor _tokenProcessor;
+        UserSecretsProcessor _processor;
 
-        public AuthController(TokenProcessor tokenProcessor)
+        public AuthController(UserSecretsProcessor _usersProcessor)
         {
-            _tokenProcessor = tokenProcessor;
+            _processor = _usersProcessor;
         }
 
         [HttpPost("login")]
         public IActionResult Login([FromBody] LoginRequest request)
         {
-            // Verify user credentials here
-            // If valid, generate tokens
-            if (IsValidUser(request.Username, request.Password))
+            try
             {
-                var claims = new List<Claim>
-            {
-                new Claim(ClaimTypes.Name, request.Username),
-                // Add other claims as needed
-            };
+                // If valid, generate tokens
+                EmailPasswordAuthenticationResult _authResult = _processor.AuthenticateUser(request.UserEmail, request.Password);
 
-                var accessToken = _tokenProcessor.GenerateAccessToken(claims);
-                var refreshToken = _tokenProcessor.GenerateRefreshToken();
+                if (!_authResult.Success)
+                {
+                    return Unauthorized(new { Result = "Unauthorized", Message = _authResult.Message });
+                }
 
-                // Store the refresh token with the user (e.g., in the database)
+                var accessToken = TokenProcessor.GenerateAccessToken(request.UserEmail);
+                var refreshToken = TokenProcessor.GenerateRefreshToken();
+
+                _processor.SaveRefreshToken(_authResult.UserData.UserEmail, refreshToken);
+                
 
                 return Ok(new
                 {
@@ -39,30 +46,52 @@ namespace SmartHome.Controllers.Security
                     RefreshToken = refreshToken
                 });
             }
+            catch (Exception ex)
+            {
+                return base.StatusCode((int)HttpStatusCode.InternalServerError, "Internal error.");
+            }
+          
 
-            return Unauthorized();
+        }
+
+        [Route("CreateNewUser")]
+        [HttpPost] 
+        public IActionResult CreateNewUser(CreateNewUserRequest request)
+        {
+            try
+            {
+                bool success = _processor.CreateNewUserUnsecure(request.UserEmail, request.Password);
+
+                return Ok(success? "Success" : "Failed");
+            }
+            catch (Exception ex)
+            {
+
+                return base.StatusCode((int)HttpStatusCode.InternalServerError, "Error processing the request.");
+            }
         }
 
         [HttpPost("refresh")]
         public IActionResult Refresh([FromBody] RefreshRequest request)
         {
             // Validate refresh token and issue a new access token
-            var claimsPrincipal = ValidateRefreshToken(request.RefreshToken);
-            if (claimsPrincipal != null)
+            UserData _uData = _processor.GetUserDataRefreshToken(request.RefreshToken);
+
+            if(_uData is null)
             {
-                var newAccessToken = _tokenProcessor.GenerateAccessToken(claimsPrincipal.Claims);
-                var newRefreshToken = _tokenProcessor.GenerateRefreshToken();
-
-                // Store the new refresh token with the user and invalidate the old one
-
-                return Ok(new
-                {
-                    AccessToken = newAccessToken,
-                    RefreshToken = newRefreshToken
-                });
+                return Unauthorized(new {Success = false, Message = "Invalid Refresh Token"});
             }
 
-            return Unauthorized();
+            var newAccessToken = TokenProcessor.GenerateAccessToken(request.RefreshToken);
+            var newRefreshToken = TokenProcessor.GenerateRefreshToken();
+            _processor.SaveRefreshToken(_uData.UserEmail, newRefreshToken);
+            // Store the new refresh token with the user and invalidate the old one
+
+            return Ok(new
+            {
+                AccessToken = newAccessToken,
+                RefreshToken = newRefreshToken
+            });
         }
 
         private bool IsValidUser(string username, string password)
@@ -80,12 +109,18 @@ namespace SmartHome.Controllers.Security
 
     public class LoginRequest
     {
-        public string Username { get; set; }
+        public string UserEmail { get; set; }
         public string Password { get; set; }
     }
 
     public class RefreshRequest
     {
         public string RefreshToken { get; set; }
+    }
+
+    public class CreateNewUserRequest
+    {
+        public string UserEmail { get; set; }
+        public string Password { get; set; }
     }
 }

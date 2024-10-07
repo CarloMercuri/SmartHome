@@ -1,6 +1,9 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+using SmartHome.Data.Interfaces;
+using SmartHome.Data.Sqlite;
 using SmartHome.Security.KeyStorage;
+using SmartHome.Security.UserSecrets;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -30,6 +33,9 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
+
+builder.Services.AddTransient<IDatabaseProcessor, SqliteProcessor>();
+builder.Services.AddTransient<UserSecretsProcessor>();
 
 
 var app = builder.Build();
